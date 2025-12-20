@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+sdkconfig
+
+# IDF build intermediate
+**/build/
+
+# VSCode / IDE
+.vscode/
+.idea/
+
+# Python envs
+.venv/
+.env/
+
+# macOS
+.DS_Store
+
+# log / monitor / temp
+*.log
+*.bin
+*.elf
