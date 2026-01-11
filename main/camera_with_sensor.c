@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "camera_with_sensor.h"
 
 static const char *TAG = "SENSOR";
 
@@ -12,8 +14,10 @@ static const char *TAG = "SENSOR";
 #define ECHO_GPIO 5
 /* Camera LED */
 #define LED_GPIO 2
-/* Proximity threshold in centimeters (trigger if measured distance is less than this) */
-#define PROXIMITY_THRESHOLD_CM 300.0f
+/* Movement detection threshold in centimeters (trigger if distance changes by more than this) */
+#define MOVEMENT_THRESHOLD_CM 3.0f
+/* Time to establish baseline reference in seconds */
+#define BASELINE_SAMPLES 10
 
 /* Speed of sound in cm/us */
 #define SOUND_SPEED_CM_PER_US 0.0343
@@ -128,13 +132,14 @@ static float ultrasonic_measure_distance(void)
     return distance_cm;
 }
 
-void app_main(void)
+static void sensor_task(void *pvParameters)
 {
-    ESP_LOGI(TAG, "HC-SR04 test started");
-
-    ultrasonic_init();
-
     int64_t led_off_time_us = 0;
+    float baseline_distance = -1;
+    int baseline_count = 0;
+    float baseline_sum = 0;
+
+    ESP_LOGI(TAG, "Establishing baseline distance (keep door closed)...");
 
     while (1) {
         const int max_attempts = 2;
@@ -145,45 +150,50 @@ void app_main(void)
             if (d > 0) {
                 samples[valid++] = d;
                 ESP_LOGD(TAG, "Attempt %d valid: %.2f cm", a + 1, d);
-                /* If we detect proximity on any attempt, trigger LED hold immediately and stop further attempts */
-                if (d < PROXIMITY_THRESHOLD_CM) {
-                    int64_t now = esp_timer_get_time();
-                    const int64_t hold_us = 10 * 1000000LL;
-                    led_off_time_us = now + hold_us;
-                    ESP_LOGI(TAG, "Proximity quick event: %.0f cm threshold crossed, LED will stay on until %lld us", (double)PROXIMITY_THRESHOLD_CM, led_off_time_us);
-                    break;
-                }
             } else {
                 ESP_LOGW(TAG, "Attempt %d failed", a + 1);
             }
             vTaskDelay(pdMS_TO_TICKS(20));
         }
 
-    float distance = -1;
+        float distance = -1;
         if (valid > 0) {
-            /* compute median */
             if (valid == 1) {
                 distance = samples[0];
             } else if (valid == 2) {
-                /* average two */
                 distance = (samples[0] + samples[1]) / 2.0f;
             } else {
-                /* sort three values (simple) and take middle */
                 float a = samples[0], b = samples[1], c = samples[2];
                 if (a > b) { float t = a; a = b; b = t; }
                 if (b > c) { float t = b; b = c; c = t; }
                 if (a > b) { float t = a; a = b; b = t; }
                 distance = b;
             }
-            ESP_LOGI(TAG, "Distance: %.2f cm (from %d valid samples)", distance, valid);
-            /* If proximity detected, set LED timeout to 10 seconds from now. If already on,
-               this resets the countdown (retrigger). */
-            if (distance < PROXIMITY_THRESHOLD_CM) {
-                int64_t now = esp_timer_get_time();
-                const int64_t hold_us = 10 * 1000000LL;
-                /* set or reset led off time */
-                led_off_time_us = now + hold_us;
-                ESP_LOGI(TAG, "Proximity event: %.0f cm threshold crossed, LED will stay on until %lld us (in ~%lld ms)", (double)PROXIMITY_THRESHOLD_CM, led_off_time_us, (led_off_time_us - now) / 1000);
+            
+            // Establish baseline (average of first BASELINE_SAMPLES readings)
+            if (baseline_count < BASELINE_SAMPLES) {
+                baseline_sum += distance;
+                baseline_count++;
+                if (baseline_count == BASELINE_SAMPLES) {
+                    baseline_distance = baseline_sum / BASELINE_SAMPLES;
+                    ESP_LOGI(TAG, "✓ Baseline established: %.2f cm", baseline_distance);
+                } else {
+                    ESP_LOGI(TAG, "Calibrating... %d/%d", baseline_count, BASELINE_SAMPLES);
+                }
+            } else {
+                // Check for movement (deviation from baseline)
+                float deviation = fabs(distance - baseline_distance);
+                
+                // ESP_LOGI(TAG, "Current: %.2f cm | Baseline: %.2f cm | Deviation: %.2f cm", 
+                //          distance, baseline_distance, deviation);
+                
+                if (deviation > MOVEMENT_THRESHOLD_CM) {
+                    int64_t now = esp_timer_get_time();
+                    const int64_t hold_us = 10 * 1000000LL;
+                    led_off_time_us = now + hold_us;
+                    // ESP_LOGI(TAG, "🚨 MOVEMENT DETECTED! Deviation: %.2f cm (threshold: %.2f cm)", 
+                    //          deviation, MOVEMENT_THRESHOLD_CM);
+                }
             }
         } else {
             ESP_LOGI(TAG, "Measurement failed (all attempts)");
@@ -200,4 +210,28 @@ void app_main(void)
 
         vTaskDelay(pdMS_TO_TICKS(200));
     }
+}
+
+esp_err_t camera_sensor_init(void)
+{
+    ESP_LOGI(TAG, "Initializing Camera + Sensor module...");
+    
+    ultrasonic_init();
+    
+    BaseType_t ret = xTaskCreate(
+        sensor_task,
+        "sensor_task",
+        4096,
+        NULL,
+        5,
+        NULL
+    );
+    
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create sensor task");
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "✓ Camera + Sensor module ready!");
+    return ESP_OK;
 }

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "rc522.h"
 #include "driver/rc522_spi.h"
+#include "rfid_with_servo.h"
 
 #define TAG "RFID_SERVO"
 
@@ -21,8 +22,8 @@
 /* Servo */
 #define SERVO_GPIO     23
 #define SERVO_FREQ_HZ  50
-#define SERVO_TIMER    LEDC_TIMER_0
-#define SERVO_CHANNEL  LEDC_CHANNEL_0
+#define SERVO_TIMER    LEDC_TIMER_1
+#define SERVO_CHANNEL  LEDC_CHANNEL_1
 
 /* Tarjetas autorizadas */
 static const uint8_t AUTH_UID1[4] = { 0x73, 0x63, 0x53, 0x2E };
@@ -126,13 +127,11 @@ static void rc522_handler(void* arg, esp_event_base_t base, int32_t event_id, vo
 }
 
 /* ---------------- MAIN ---------------- */
-void app_main(void)
+esp_err_t rfid_servo_init(void)
 {
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "═══════════════════════════════════");
-    ESP_LOGI(TAG, "   RFID RC522 + Servo Control");
-    ESP_LOGI(TAG, "   ESP32-C6 Version");
-    ESP_LOGI(TAG, "═══════════════════════════════════");
+    ESP_LOGI(TAG, "Initializing RFID + Servo module...");
+    
+    esp_log_level_set("rc522", ESP_LOG_WARN);
     
     // Inicializar servo
     servo_init();
@@ -148,9 +147,8 @@ void app_main(void)
         .quadhd_io_num = -1,
     };
     
-    // Configuración del dispositivo SPI (RC522)
     spi_device_interface_config_t dev_config = {
-        .clock_speed_hz = 5000000,  // 5 MHz
+        .clock_speed_hz = 5000000,
         .mode = 0,
         .spics_io_num = RFID_CS,
         .queue_size = 7,
@@ -159,7 +157,6 @@ void app_main(void)
         .post_cb = NULL,
     };
     
-    // Configuración del driver RC522 SPI
     rc522_spi_config_t spi_config = {
         .host_id = SPI2_HOST,
         .bus_config = &bus_config,
@@ -168,24 +165,21 @@ void app_main(void)
         .rst_io_num = RFID_RST,
     };
     
-    // Crear el driver SPI
     rc522_driver_handle_t driver;
     esp_err_t err = rc522_spi_create(&spi_config, &driver);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to create SPI driver: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
     ESP_LOGI(TAG, "✓ SPI driver created");
     
-    // Instalar el driver
     err = rc522_driver_install(driver);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to install driver: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
     ESP_LOGI(TAG, "✓ Driver installed");
     
-    // Configuración del RC522
     rc522_config_t config = {
         .driver = driver,
         .poll_interval_ms = 500,
@@ -194,34 +188,32 @@ void app_main(void)
         .task_mutex = NULL,
     };
     
-    // Crear el handle del RC522
     err = rc522_create(&config, &scanner);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to create RC522: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
-    ESP_LOGI(TAG, "✓ RC522 created successfully");
+    ESP_LOGI(TAG, "✓ RC522 created");
     
-    // Registrar el event handler
     err = rc522_register_events(scanner, RC522_EVENT_ANY, rc522_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to register events: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
     ESP_LOGI(TAG, "✓ Event handler registered");
     
-    // Iniciar el scanner
     err = rc522_start(scanner);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "✗ Failed to start RC522: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
     
-    ESP_LOGI(TAG, "═══════════════════════════════════");
-    ESP_LOGI(TAG, "✓ RC522 is ready and scanning!");
-    ESP_LOGI(TAG, "═══════════════════════════════════");
-    ESP_LOGI(TAG, "📍 Place your RFID card near reader");
-    ESP_LOGI(TAG, "");
-    ESP_LOGI(TAG, "Tip: Keep the card on reader for 1-2 seconds");
-    ESP_LOGI(TAG, "");
+    ESP_LOGI(TAG, "✓ RFID + Servo module ready!");
+    return ESP_OK;
+}
+
+// Función opcional para actualizar tarjetas autorizadas
+void rfid_servo_set_authorized_cards(const uint8_t uid1[4], const uint8_t uid2[4])
+{
+    ESP_LOGI(TAG, "Note: To change authorized UIDs, modify AUTH_UID1/AUTH_UID2 in source");
 }
