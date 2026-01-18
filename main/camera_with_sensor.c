@@ -9,10 +9,9 @@
 
 static const char *TAG = "SENSOR";
 
-/* GPIO configuration */
 #define TRIG_GPIO 4
 #define ECHO_GPIO 5
-/* Camera LED */
+
 #define LED_GPIO 2
 /* Movement detection threshold in centimeters (trigger if distance changes by more than this) */
 #define MOVEMENT_THRESHOLD_CM 3.0f
